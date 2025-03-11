@@ -9,7 +9,7 @@ https://docs.djangoproject.com/en/5.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
-
+import os
 from pathlib import Path
 from datetime import timedelta
 import environ
@@ -27,10 +27,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-0nm(n_du7fo6t@*&xx1m(f3_98kqj0y)tm0hfbww#+-aq7k95g"
+SECRET_KEY = env("SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = []
 
@@ -100,15 +100,15 @@ WSGI_APPLICATION = "trustcall.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-tmpPostgres = urlparse(env("DATABASE_URL"))
+DATABASE_URI = urlparse(env("DATABASE_URL"))
 
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": tmpPostgres.path.replace("/", ""),
-        "USER": tmpPostgres.username,
-        "PASSWORD": tmpPostgres.password,
-        "HOST": tmpPostgres.hostname,
+        "NAME": DATABASE_URI.path.replace("/", ""),
+        "USER": DATABASE_URI.username,
+        "PASSWORD": DATABASE_URI.password,
+        "HOST": DATABASE_URI.hostname,
         "PORT": 5432,
     }
 }
