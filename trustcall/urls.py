@@ -1,5 +1,5 @@
 """
-URL configuration for instahyre project.
+URL configuration for trustcall project.
 
 The `urlpatterns` list routes URLs to views. For more information please see:
     https://docs.djangoproject.com/en/5.1/topics/http/urls/
@@ -18,9 +18,11 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 from django.urls import include
+from .views import members
 
 
 urlpatterns = [
+    path('',members),
     path("admin/", admin.site.urls),
     path("api/", include("base.urls")),
 ]

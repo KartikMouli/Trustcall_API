@@ -1,5 +1,5 @@
 """
-ASGI config for instahyre project.
+ASGI config for trustcall project.
 
 It exposes the ASGI callable as a module-level variable named ``application``.
 
@@ -11,6 +11,6 @@ import os
 
 from django.core.asgi import get_asgi_application
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'instahyre.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'trustcall.settings')
 
 application = get_asgi_application()

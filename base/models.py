@@ -7,7 +7,7 @@ class User(AbstractUser):
     """
     Custom User model with a phone number field and email address.
     """
-    phone_number = models.CharField(max_length=15, unique=True)
+    phone_number = models.CharField(max_length=15, unique=True, db_index=True)
     email_address = models.EmailField(null=True, blank=True)
 
     def clean(self):
@@ -71,7 +71,7 @@ class SpamRecord(models.Model):
     """
     Model to track spam reports for phone numbers.
     """
-    phone_number = models.CharField(max_length=15, unique=True)
+    phone_number = models.CharField(max_length=15, unique=True, db_index=True)
     spam_count = models.IntegerField(default=0)
     last_reported = models.DateTimeField(auto_now=True)
 
@@ -106,7 +106,7 @@ class GlobalPhonebook(models.Model):
     """
     Global phonebook model for managing global contacts and spam status.
     """
-    phone_number = models.CharField(max_length=15)
+    phone_number = models.CharField(max_length=15, db_index=True)
     name = models.CharField(max_length=255)
     is_spam = models.BooleanField(default=False)
 

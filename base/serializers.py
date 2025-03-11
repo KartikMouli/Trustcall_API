@@ -14,7 +14,12 @@ class UserSerializer(serializers.ModelSerializer):
 class ContactSerializer(serializers.ModelSerializer):
     class Meta:
         model = Contact
-        fields = ['id', 'user', 'phone_number', 'name']
+        fields = ['id',  'phone_number', 'name']
+
+        def create(self, validated_data):
+            # Automatically include the authenticated user
+            validated_data['user'] = self.context['request'].user
+            return Contact.objects.create(**validated_data)
 
 class SpamRecordSerializer(serializers.ModelSerializer):
     class Meta:

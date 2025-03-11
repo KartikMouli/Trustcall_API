@@ -3,17 +3,18 @@ from rest_framework.decorators import api_view, permission_classes, throttle_cla
 from rest_framework.response import Response
 from django.core.cache import cache
 from django.db.models import Q
-from .models import SpamRecord, GlobalPhonebook, SpamReport, User, Contact
-from .serializers import UserSerializer, ContactSerializer, GlobalPhonebookSerializer, SpamReportSerializer
+from .models import SpamRecord, GlobalPhonebook, SpamReport, User
+from .serializers import UserSerializer, ContactSerializer, SpamReportSerializer
 from rest_framework.throttling import UserRateThrottle
+
 
 # Custom Throttling class
 class CustomUserRateThrottle(UserRateThrottle):
-    rate = '10/minute'  # Limit the user to 10 requests per minute
+    rate = '100/minute'  
 
 def calculate_spam_likelihood(spam_count):
     total_spam_records = SpamRecord.objects.count()
-    max_threshold = total_spam_records * 0.1  # 10% of total spam records
+    max_threshold = total_spam_records * 0.2 
     likelihood = (spam_count / max_threshold) * 100
     return min(100, likelihood)
 
@@ -27,6 +28,7 @@ def register_user(request):
     if request.method == "POST":
         serializer = UserSerializer(data=request.data)
         if serializer.is_valid():
+            
             user = serializer.save()
 
             # Add user to GlobalPhonebook
@@ -124,7 +126,8 @@ def search_by_name(request):
 
         starts_with_results = GlobalPhonebook.objects.filter(name__istartswith=query)
         contains_results = GlobalPhonebook.objects.filter(name__icontains=query).exclude(name__istartswith=query)
-        results = list(starts_with_results) + list(contains_results)
+        # Combine results without evaluating the QuerySets yet
+        results = starts_with_results.union(contains_results)
 
         # Prepare response data with spam likelihood
         data = []
