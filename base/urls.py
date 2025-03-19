@@ -37,4 +37,7 @@ urlpatterns = [
     # Import/Export Contacts
     path("download/contacts/", views.export_contacts_csv, name="export_contacts_csv"),
     path("upload/contacts/", views.import_contacts_csv, name="import_contacts_csv"),
+    # Analytics
+    path('analytics/top-spam-numbers/', views.analytics_top_spam_numbers, name='analytics_top_spam_numbers'),
+    path('analytics/spam-trends/', views.analytics_spam_trends, name='analytics_spam_trends'),
 ]

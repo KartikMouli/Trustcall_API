@@ -6,10 +6,12 @@ from .models import SpamReport, User, Contact
 from .serializers import UserSerializer, ContactSerializer
 from rest_framework.throttling import UserRateThrottle
 from django.db.models import Case, When, IntegerField, Q
+from django.db.models.functions import TruncDay
+from django.db.models import Count
 
 # Custom Throttling class
 class CustomUserRateThrottle(UserRateThrottle):
-    rate = "5/minute"
+    rate = "10/minute"
 
 
 def calculate_spam_likelihood(phone_number):
@@ -295,3 +297,47 @@ def import_contacts_csv(request):
             contacts_created += 1
 
     return Response({'message': f'{contacts_created} contacts imported successfully.'})
+
+
+
+
+
+@api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated])
+def analytics_top_spam_numbers(request):
+    """
+    Return the top spam reported numbers based on the count of reports.
+    """
+    limit = request.GET.get('limit', 10)
+    try:
+        limit = int(limit)
+    except ValueError:
+        limit = 10
+
+    # Aggregate spam reports by phone number and annotate with the report count.
+    spam_data = (
+        SpamReport.objects
+        .values('phone_number')
+        .annotate(report_count=Count('phone_number'))
+        .order_by('-report_count')[:limit]
+    )
+
+    return Response(spam_data, status=status.HTTP_200_OK)
+
+
+
+
+@api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated])
+def analytics_spam_trends(request):
+    """
+    Return daily spam report counts for trend analysis.
+    """
+    trend_data = (
+        SpamReport.objects
+        .annotate(day=TruncDay('created_at'))
+        .values('day')
+        .annotate(report_count=Count('id'))
+        .order_by('day')
+    )
+    return Response(trend_data, status=status.HTTP_200_OK)
