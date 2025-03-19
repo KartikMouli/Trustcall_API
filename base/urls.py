@@ -36,4 +36,6 @@ urlpatterns = [
     # Detail View for Phone Number
     path("detail/<str:phone_number>/", views.person_detail, name="person_detail"),
 
+    path('download/contacts/', views.download_contacts, name='download_contacts'),
+
 ]

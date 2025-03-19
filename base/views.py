@@ -2,24 +2,35 @@ from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from django.core.cache import cache
-from django.db.models import Q
 from .models import SpamReport, User, Contact
 from .serializers import UserSerializer, ContactSerializer
 from rest_framework.throttling import UserRateThrottle
 
+from .tasks import recalculate_spam_likelihood, export_contacts_task
+
+
+from django.http import FileResponse
 
 # Custom Throttling class
 class CustomUserRateThrottle(UserRateThrottle):
     rate = "1000/minute"
 
 
-def calculate_spam_likelihood(phone_number):
-    spam_count = SpamReport.objects.filter(phone_number=phone_number).count()
-    total_reports = SpamReport.objects.count()
-    if total_reports == 0:
-        return 0
-    likelihood = (spam_count / total_reports) * 100
-    return min(100, round(likelihood, 2))
+def get_spam_likelihood(phone_number):
+    """
+    Get the spam likelihood for a phone number, using cache if available.
+    """
+    cache_key = f"spam_likelihood_{phone_number}"
+    cached_result = cache.get(cache_key)
+
+    if cached_result is not None:
+        return cached_result  # Return cached value
+
+    # Trigger Celery task to recalculate spam likelihood
+    task = recalculate_spam_likelihood.delay(phone_number)
+    return "Calculating..."  # Indicate that the calculation is in progress
+
+
 
 
 # User Registration
@@ -40,6 +51,7 @@ def register_user(request):
 # Add Contact
 @api_view(["POST"])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([CustomUserRateThrottle])
 def add_contact(request):
     """
     Add a contact for the authenticated user and update the global phonebook.
@@ -55,6 +67,7 @@ def add_contact(request):
 # Mark Spam
 @api_view(["POST"])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([CustomUserRateThrottle])
 def mark_spam(request):
     """
     Mark a phone number as spam. Only authenticated users can report spam.
@@ -73,6 +86,9 @@ def mark_spam(request):
             {"error": "You have already reported this number as spam."},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    
+    # Trigger spam likelihood recalculation asynchronously
+    recalculate_spam_likelihood.delay(phone_number)
 
     SpamReport.objects.create(reporter=request.user, phone_number=phone_number)
     return Response(
@@ -117,7 +133,7 @@ def search_by_name(request):
             {
                 "name": user.username,
                 "phone_number": user.phone_number,
-                "spam_likelihood": calculate_spam_likelihood(user.phone_number),
+                "spam_likelihood": get_spam_likelihood(user.phone_number),
                 "is_registered_user": True,
             }
         )
@@ -127,7 +143,7 @@ def search_by_name(request):
             {
                 "name": contact.name,
                 "phone_number": contact.phone_number,
-                "spam_likelihood": calculate_spam_likelihood(contact.phone_number),
+                "spam_likelihood": get_spam_likelihood(contact.phone_number),
                 "is_registered_user": False,
             }
         )
@@ -160,7 +176,7 @@ def search_by_phone(request):
         data = {
             "name": user.username,
             "phone_number": user.phone_number,
-            "spam_likelihood": calculate_spam_likelihood(user.phone_number),
+            "spam_likelihood": get_spam_likelihood(user.phone_number),
             "email": None,
             "is_registered_user": True,
         }
@@ -185,7 +201,7 @@ def search_by_phone(request):
             {
                 "name": contact.name,
                 "phone_number": contact.phone_number,
-                "spam_likelihood": calculate_spam_likelihood(contact.phone_number),
+                "spam_likelihood": get_spam_likelihood(contact.phone_number),
                 "email": None,
                 "is_registered_user": False,
             }
@@ -199,6 +215,7 @@ def search_by_phone(request):
 # Detail view for a specific phone number (optional but recommended)
 @api_view(["GET"])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([CustomUserRateThrottle])
 def person_detail(request, phone_number):
 
     user = User.objects.filter(phone_number=phone_number).first()
@@ -206,7 +223,7 @@ def person_detail(request, phone_number):
     data = {
         "name": None,
         "phone_number": phone_number,
-        "spam_likelihood": calculate_spam_likelihood(phone_number),
+        "spam_likelihood": get_spam_likelihood(phone_number),
         "email": None,
         "is_registered_user": False,
     }
@@ -227,3 +244,28 @@ def person_detail(request, phone_number):
             data["name"] = contact_entry.name
 
     return Response(data)
+
+
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def download_contacts(request):
+    """
+    Trigger export and provide download link for contacts.
+    """
+    user_id = request.user.id
+
+    # Trigger the export task asynchronously
+    task_result = export_contacts_task.delay(user_id)
+
+    # Wait for the task to complete 
+    task_result.wait()  
+
+    if task_result.successful():
+        file_path = task_result.result  # Get the file path from the task result
+
+        # Serve the file as a response for download
+        return FileResponse(open(file_path, 'rb'), as_attachment=True, filename=f"contacts_user_{user_id}.csv")
+
+    return Response({"error": "Failed to export contacts."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

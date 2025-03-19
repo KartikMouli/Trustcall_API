@@ -46,7 +46,9 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "base.apps.BaseConfig",
     "rest_framework",
-    "rest_framework_simplejwt", 
+    "rest_framework_simplejwt",
+    "django_celery_results",
+    "django_celery_beat",
 ]
 
 REST_FRAMEWORK = {
@@ -54,7 +56,6 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
 }
-
 
 
 # JWT settings
@@ -113,6 +114,15 @@ DATABASES = {
         "PORT": 5432,
     }
 }
+
+
+# Redis configuration for Celery
+CELERY_BROKER_URL = env("REDIS_URL")  # Redis URL (ensure Redis is running)
+CELERY_ACCEPT_CONTENT = ["json"]  
+CELERY_TASK_SERIALIZER = "json"
+
+# Celery result backend (optional)
+CELERY_RESULT_BACKEND = "django-db"  # Store task results in the database
 
 
 # Password validation
