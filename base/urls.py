@@ -15,7 +15,6 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
-
 from django.urls import path
 from . import views
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -35,5 +34,7 @@ urlpatterns = [
     path("search/phone/", views.search_by_phone, name="search_by_phone"),
     # Detail View for Phone Number
     path("detail/<str:phone_number>/", views.person_detail, name="person_detail"),
-
+    # Import/Export Contacts
+    path("download/contacts/", views.export_contacts_csv, name="export_contacts_csv"),
+    path("upload/contacts/", views.import_contacts_csv, name="import_contacts_csv"),
 ]

@@ -2,15 +2,14 @@ from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from django.core.cache import cache
-from django.db.models import Q
 from .models import SpamReport, User, Contact
 from .serializers import UserSerializer, ContactSerializer
 from rest_framework.throttling import UserRateThrottle
-
+from django.db.models import Case, When, IntegerField, Q
 
 # Custom Throttling class
 class CustomUserRateThrottle(UserRateThrottle):
-    rate = "1000/minute"
+    rate = "5/minute"
 
 
 def calculate_spam_likelihood(phone_number):
@@ -44,10 +43,9 @@ def add_contact(request):
     """
     Add a contact for the authenticated user and update the global phonebook.
     """
-    print("data:",request)
     serializer = ContactSerializer(data=request.data, context={"request": request})
     if serializer.is_valid():
-        serializer.save()
+        serializer.save(owner=request.user)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -55,6 +53,7 @@ def add_contact(request):
 # Mark Spam
 @api_view(["POST"])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([CustomUserRateThrottle])
 def mark_spam(request):
     """
     Mark a phone number as spam. Only authenticated users can report spam.
@@ -87,54 +86,55 @@ def mark_spam(request):
 def search_by_name(request):
     query = request.GET.get("query", "").strip()
     if not query:
-        return Response(
-            {"error": "Query parameter is required."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
+        return Response({"error": "Query parameter is required."}, status=status.HTTP_400_BAD_REQUEST)
+    
     cache_key = f"search_name_{query.lower()}"
     cached_data = cache.get(cache_key)
     if cached_data:
         return Response(cached_data)
-
-    # Users whose names start with query (priority)
-    users_startswith = User.objects.filter(username__istartswith=query)
-    contacts_startswith = Contact.objects.filter(name__istartswith=query)
-
-    # Users whose names contain query but don't start with it (lower priority)
-    users_contains = User.objects.filter(username__icontains=query).exclude(
-        id__in=users_startswith
-    )
-    contacts_contains = Contact.objects.filter(name__icontains=query).exclude(
-        id__in=contacts_startswith
-    )
-
+    
+    
+    user_qs = User.objects.filter(Q(username__icontains=query))
+    user_qs = user_qs.annotate(
+        priority=Case(
+            When(username__istartswith=query, then=0),
+            default=1,
+            output_field=IntegerField(),
+        )
+    ).order_by('priority', 'username')
+    
+    contact_qs = Contact.objects.filter(Q(name__icontains=query))
+    contact_qs = contact_qs.annotate(
+        priority=Case(
+            When(name__istartswith=query, then=0),
+            default=1,
+            output_field=IntegerField(),
+        )
+    ).order_by('priority', 'name')
+    
+    # Serialize results
     results = []
-
-    # Combine and serialize results with spam likelihood
-    for user in list(users_startswith) + list(users_contains):
-        results.append(
-            {
-                "name": user.username,
-                "phone_number": user.phone_number,
-                "spam_likelihood": calculate_spam_likelihood(user.phone_number),
-                "is_registered_user": True,
-            }
-        )
-
-    for contact in list(contacts_startswith) + list(contacts_contains):
-        results.append(
-            {
-                "name": contact.name,
-                "phone_number": contact.phone_number,
-                "spam_likelihood": calculate_spam_likelihood(contact.phone_number),
-                "is_registered_user": False,
-            }
-        )
-
-    cache.set(cache_key, results, timeout=300)  # Cache for 5 minutes
-
+    
+    for user in user_qs:
+        results.append({
+            "name": user.username,
+            "phone_number": user.phone_number,
+            "spam_likelihood": calculate_spam_likelihood(user.phone_number),
+            "is_registered_user": True,
+        })
+    
+    for contact in contact_qs:
+        results.append({
+            "name": contact.name,
+            "phone_number": contact.phone_number,
+            "spam_likelihood": calculate_spam_likelihood(contact.phone_number),
+            "is_registered_user": False,
+        })
+    
+    # Optionally apply pagination here
+    cache.set(cache_key, results, timeout=300)
     return Response(results)
+
 
 
 # Search by Phone Number View (Global Phonebook: Users + Contacts)
@@ -199,6 +199,7 @@ def search_by_phone(request):
 # Detail view for a specific phone number (optional but recommended)
 @api_view(["GET"])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([CustomUserRateThrottle])
 def person_detail(request, phone_number):
 
     user = User.objects.filter(phone_number=phone_number).first()
@@ -227,3 +228,70 @@ def person_detail(request, phone_number):
             data["name"] = contact_entry.name
 
     return Response(data)
+
+from django.http import HttpResponse
+import csv
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+@throttle_classes([CustomUserRateThrottle])
+def export_contacts_csv(request):
+    """
+    Exports the authenticated user's contacts as a CSV file.
+    """
+    contacts = request.user.contacts.all()  # Assuming a related name 'contacts'
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename="contacts.csv"'
+    
+    writer = csv.writer(response)
+    # Write header row
+    writer.writerow(['Name', 'Phone Number'])
+    
+    # Write data rows
+    for contact in contacts:
+        writer.writerow([contact.name, contact.phone_number])
+    
+    return response
+
+
+from rest_framework.parsers import MultiPartParser
+from rest_framework.decorators import api_view, permission_classes, parser_classes
+import io
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+@parser_classes([MultiPartParser])
+def import_contacts_csv(request):
+    """
+    Imports contacts from a CSV file uploaded by the user.
+    CSV file should have headers: Name, Phone Number, Email.
+    """
+    file_obj = request.FILES.get('file', None)
+    if not file_obj:
+        return Response({'error': 'No file uploaded.'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        decoded_file = file_obj.read().decode('utf-8')
+        io_string = io.StringIO(decoded_file)
+        reader = csv.DictReader(io_string)
+    except Exception as e:
+        return Response({'error': 'Failed to read CSV file.'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    contacts_created = 0
+    for row in reader:
+        name = row.get('Name')
+        phone_number = row.get('Phone Number')
+
+        if not name or not phone_number:
+            continue  # Skip invalid rows
+        
+        # Create or update the contact
+        contact, created = Contact.objects.update_or_create(
+            owner=request.user,
+            phone_number=phone_number,
+            defaults={'name': name},
+        )
+        if created:
+            contacts_created += 1
+
+    return Response({'message': f'{contacts_created} contacts imported successfully.'})

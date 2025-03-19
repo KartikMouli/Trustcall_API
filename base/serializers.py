@@ -22,6 +22,14 @@ class ContactSerializer(serializers.ModelSerializer):
         # Automatically include the authenticated user
         validated_data["owner"] = self.context["request"].user
         return Contact.objects.create(**validated_data)
+    
+    def validate(self, data):
+        request = self.context.get("request")
+        phone_number = data.get('phone_number')
+        # Check if the contact already exists for the authenticated user.
+        if Contact.objects.filter(owner=request.user, phone_number=phone_number).exists():
+            raise serializers.ValidationError("A contact with this phone number already exists.")
+        return data
 
 
 class SpamReportSerializer(serializers.ModelSerializer):
