@@ -1,38 +1,31 @@
 from rest_framework import serializers
-from .models import User, Contact, GlobalPhonebook,SpamReport,SpamRecord
+from .models import User, Contact, SpamReport
+
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'phone_number', 'email_address', 'password']
-        extra_kwargs = {'password': {'write_only': True}}
+        fields = ["username", "phone_number", "email", "password"]
+        extra_kwargs = {"password": {"write_only": True}}
 
     def create(self, validated_data):
         user = User.objects.create_user(**validated_data)
         return user
 
+
 class ContactSerializer(serializers.ModelSerializer):
     class Meta:
         model = Contact
-        fields = ['id',  'phone_number', 'name']
+        fields = ["name", "phone_number"]
 
-        def create(self, validated_data):
-            # Automatically include the authenticated user
-            validated_data['user'] = self.context['request'].user
-            return Contact.objects.create(**validated_data)
+    def create(self, validated_data):
+        # Automatically include the authenticated user
+        validated_data["owner"] = self.context["request"].user
+        return Contact.objects.create(**validated_data)
 
-class SpamRecordSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = SpamRecord
-        fields = ['phone_number', 'spam_count', 'last_reported']
-
-class GlobalPhonebookSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = GlobalPhonebook
-        fields = ['phone_number', 'name', 'is_spam']
 
 class SpamReportSerializer(serializers.ModelSerializer):
     class Meta:
         model = SpamReport
-        fields = ['user', 'phone_number', 'reported_at']
-        read_only_fields = ['reported_at'] 
+        fields = ["phone_number"]
+        read_only_fields = ["timestamp"]

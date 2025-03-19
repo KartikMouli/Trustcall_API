@@ -46,7 +46,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "base.apps.BaseConfig",
     "rest_framework",
-    "rest_framework_simplejwt",
+    "rest_framework_simplejwt", 
 ]
 
 REST_FRAMEWORK = {
@@ -54,6 +54,8 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
 }
+
+
 
 # JWT settings
 
@@ -148,6 +150,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = "static/"
+
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field

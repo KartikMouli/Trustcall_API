@@ -15,21 +15,25 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
-from django.contrib import admin
+
 from django.urls import path
-from django.urls import include
 from . import views
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
-from django.urls import path
-from . import views
 
 urlpatterns = [
+    # User Registration and Authentication
     path("register/", views.register_user, name="register_user"),
-    path("add-contact/", views.add_contact, name="add_contact"),
-    path("mark-spam/", views.mark_spam, name="mark_spam"),
-    path("search-by-name/", views.search_by_name, name="search_by_name"),
-    path("search-by-phone/", views.search_by_phone, name="search_by_phone"),
     path("token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    # Contact Management
+    path("add/contact/", views.add_contact, name="add_contact"),
+    # Spam Reporting
+    path("spam/", views.mark_spam, name="mark_spam"),
+    # Search Functionality
+    path("search/name/", views.search_by_name, name="search_by_name"),
+    path("search/phone/", views.search_by_phone, name="search_by_phone"),
+    # Detail View for Phone Number
+    path("detail/<str:phone_number>/", views.person_detail, name="person_detail"),
+
 ]

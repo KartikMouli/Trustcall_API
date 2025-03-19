@@ -3,20 +3,24 @@ from rest_framework.decorators import api_view, permission_classes, throttle_cla
 from rest_framework.response import Response
 from django.core.cache import cache
 from django.db.models import Q
-from .models import SpamRecord, GlobalPhonebook, SpamReport, User
-from .serializers import UserSerializer, ContactSerializer, SpamReportSerializer
+from .models import SpamReport, User, Contact
+from .serializers import UserSerializer, ContactSerializer
 from rest_framework.throttling import UserRateThrottle
 
 
 # Custom Throttling class
 class CustomUserRateThrottle(UserRateThrottle):
-    rate = '100/minute'  
+    rate = "1000/minute"
 
-def calculate_spam_likelihood(spam_count):
-    total_spam_records = SpamRecord.objects.count()
-    max_threshold = total_spam_records * 0.2 
-    likelihood = (spam_count / max_threshold) * 100
-    return min(100, likelihood)
+
+def calculate_spam_likelihood(phone_number):
+    spam_count = SpamReport.objects.filter(phone_number=phone_number).count()
+    total_reports = SpamReport.objects.count()
+    if total_reports == 0:
+        return 0
+    likelihood = (spam_count / total_reports) * 100
+    return min(100, round(likelihood, 2))
+
 
 # User Registration
 @api_view(["POST"])
@@ -25,175 +29,201 @@ def register_user(request):
     """
     Register a new user and add to the Global Phonebook.
     """
-    if request.method == "POST":
-        serializer = UserSerializer(data=request.data)
-        if serializer.is_valid():
-            
-            user = serializer.save()
 
-            # Add user to GlobalPhonebook
-            global_entry, created = GlobalPhonebook.objects.get_or_create(
-                phone_number=user.phone_number,
-                defaults={"name": user.username, "is_spam": False},
-            )
+    serializer = UserSerializer(data=request.data)
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-            if created:
-                print(f"User {user.username} added to GlobalPhonebook.")
-
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 # Add Contact
 @api_view(["POST"])
+@permission_classes([permissions.IsAuthenticated])
 def add_contact(request):
     """
     Add a contact for the authenticated user and update the global phonebook.
     """
-    if request.user.is_authenticated:
-        serializer = ContactSerializer(data=request.data)
-        if serializer.is_valid():
-            contact = serializer.save(user=request.user)
+    print("data:",request)
+    serializer = ContactSerializer(data=request.data, context={"request": request})
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-            # Add or update the global phonebook
-            global_entry, created = GlobalPhonebook.objects.get_or_create(
-                phone_number=contact.phone_number,
-                defaults={"name": contact.name, "is_spam": False},
-            )
-
-            if not created:
-                global_entry.name = contact.name
-                global_entry.save()
-
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    return Response({"error": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
 
 # Mark Spam
 @api_view(["POST"])
+@permission_classes([permissions.IsAuthenticated])
 def mark_spam(request):
     """
     Mark a phone number as spam. Only authenticated users can report spam.
     """
-    if request.user.is_authenticated:
-        phone_number = request.data.get("phone_number")
+    phone_number = request.data.get("phone_number")
+    if not phone_number:
+        return Response(
+            {"error": "phone_number is required."}, status=status.HTTP_400_BAD_REQUEST
+        )
 
-        # Ensure the user has not already reported this number as spam
-        if SpamReport.objects.filter(user=request.user, phone_number=phone_number).exists():
-            return Response({"error": "You have already reported this number as spam."}, status=status.HTTP_400_BAD_REQUEST)
+    # Avoid duplicate spam reports by same user
+    if SpamReport.objects.filter(
+        reporter=request.user, phone_number=phone_number
+    ).exists():
+        return Response(
+            {"error": "You have already reported this number as spam."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
-        # Create spam report and update spam record
-        spam_data = {"user": request.user.id, "phone_number": phone_number}
-        serializer = SpamReportSerializer(data=spam_data)
-        if serializer.is_valid():
-            serializer.save()
+    SpamReport.objects.create(reporter=request.user, phone_number=phone_number)
+    return Response(
+        {"message": "Spam reported successfully."}, status=status.HTTP_201_CREATED
+    )
 
-            # Increment spam count in SpamRecord
-            spam_record, created = SpamRecord.objects.get_or_create(phone_number=phone_number)
-            spam_record.spam_count += 1
-            spam_record.save()
 
-            # Update global phonebook entry to mark as spam
-            global_entry, created = GlobalPhonebook.objects.get_or_create(phone_number=phone_number)
-            global_entry.is_spam = True
-            global_entry.save()
-
-            return Response({"message": "Spam reported successfully"}, status=status.HTTP_200_OK)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    return Response({"error": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
-
-# Search by Name
+# Search by Name View (Global Phonebook: Users + Contacts)
 @api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated])
 @throttle_classes([CustomUserRateThrottle])
 def search_by_name(request):
-    """
-    Search for a person by name in the global phonebook.
-    """
-    if request.user.is_authenticated:
-        query = request.GET.get("query", "").strip()
-        if not query:
-            return Response({"error": "Query parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+    query = request.GET.get("query", "").strip()
+    if not query:
+        return Response(
+            {"error": "Query parameter is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
-        cache_key = f"search_{query}"
-        cached_results = cache.get(cache_key)
+    cache_key = f"search_name_{query.lower()}"
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return Response(cached_data)
 
-        if cached_results:
-            return Response(cached_results, status=status.HTTP_200_OK)
+    # Users whose names start with query (priority)
+    users_startswith = User.objects.filter(username__istartswith=query)
+    contacts_startswith = Contact.objects.filter(name__istartswith=query)
 
-        starts_with_results = GlobalPhonebook.objects.filter(name__istartswith=query)
-        contains_results = GlobalPhonebook.objects.filter(name__icontains=query).exclude(name__istartswith=query)
-        # Combine results without evaluating the QuerySets yet
-        results = starts_with_results.union(contains_results)
+    # Users whose names contain query but don't start with it (lower priority)
+    users_contains = User.objects.filter(username__icontains=query).exclude(
+        id__in=users_startswith
+    )
+    contacts_contains = Contact.objects.filter(name__icontains=query).exclude(
+        id__in=contacts_startswith
+    )
 
-        # Prepare response data with spam likelihood
-        data = []
-        for result in results:
-            spam_record = SpamRecord.objects.filter(phone_number=result.phone_number).first()
-            spam_likelihood = calculate_spam_likelihood(spam_record.spam_count if spam_record else 0)
+    results = []
 
-            data.append({
-                "name": result.name,
-                "phone_number": result.phone_number,
-                "spam_likelihood": spam_likelihood,
-            })
+    # Combine and serialize results with spam likelihood
+    for user in list(users_startswith) + list(users_contains):
+        results.append(
+            {
+                "name": user.username,
+                "phone_number": user.phone_number,
+                "spam_likelihood": calculate_spam_likelihood(user.phone_number),
+                "is_registered_user": True,
+            }
+        )
 
-        cache.set(cache_key, data, timeout=300)
+    for contact in list(contacts_startswith) + list(contacts_contains):
+        results.append(
+            {
+                "name": contact.name,
+                "phone_number": contact.phone_number,
+                "spam_likelihood": calculate_spam_likelihood(contact.phone_number),
+                "is_registered_user": False,
+            }
+        )
 
-        return Response(data, status=status.HTTP_200_OK)
+    cache.set(cache_key, results, timeout=300)  # Cache for 5 minutes
 
-    return Response({"error": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
+    return Response(results)
 
-# Search by Phone Number
+
+# Search by Phone Number View (Global Phonebook: Users + Contacts)
 @api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated])
 @throttle_classes([CustomUserRateThrottle])
 def search_by_phone(request):
-    """
-    Search for a phone number in the global phonebook.
-    """
-    if request.user.is_authenticated:
-        query = request.GET.get("query", "").strip()
-        print(query)
-        if not query:
-            return Response({"error": "Query parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+    phone_query = request.GET.get("query", "").strip()
+    if not phone_query:
+        return Response(
+            {"error": "Query parameter is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
-        cache_key = f"search_{query}"
-        cached_results = cache.get(cache_key)
+    cache_key = f"search_phone_{phone_query}"
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return Response(cached_data)
 
-        if cached_results:
-            return Response(cached_results, status=status.HTTP_200_OK)
+    user = User.objects.filter(phone_number=phone_query).first()
 
-        # Search for a registered user first
-        registered_user = User.objects.filter(phone_number=query).first()
-        if registered_user:
-            spam_count = SpamRecord.objects.filter(phone_number=query).first()
-            spam_likelihood = calculate_spam_likelihood(spam_count.spam_count if spam_count else 0)
-            data = {
-                "name": registered_user.username,
-                "phone_number": registered_user.phone_number,
-                "spam_likelihood": spam_likelihood,
-                "email": registered_user.email_address,
+    if user:
+        data = {
+            "name": user.username,
+            "phone_number": user.phone_number,
+            "spam_likelihood": calculate_spam_likelihood(user.phone_number),
+            "email": None,
+            "is_registered_user": True,
+        }
+        # Email visible only if searching user is in user's contacts
+        if Contact.objects.filter(
+            owner=user, phone_number=request.user.phone_number
+        ).exists():
+            data["email"] = user.email
+
+        cache.set(cache_key, data, timeout=300)
+        return Response(data)
+
+    # If no registered user found, look into contacts globally
+    contacts = Contact.objects.filter(phone_number=phone_query).distinct(
+        "name", "phone_number"
+    )
+
+    results = []
+
+    for contact in contacts:
+        results.append(
+            {
+                "name": contact.name,
+                "phone_number": contact.phone_number,
+                "spam_likelihood": calculate_spam_likelihood(contact.phone_number),
+                "email": None,
+                "is_registered_user": False,
             }
-            cache.set(cache_key, data, timeout=300)  # Cache for 5 minutes
-            return Response(data, status=status.HTTP_200_OK)
+        )
 
-        # If no registered user, search in GlobalPhonebook
-        results = GlobalPhonebook.objects.filter(phone_number=query)
-        data = []
-        for result in results:
-            spam_count = SpamRecord.objects.filter(phone_number=result.phone_number).first()
-            spam_likelihood = calculate_spam_likelihood(spam_count.spam_count if spam_count else 0)
-            data.append({
-                "name": result.name,
-                "phone_number": result.phone_number,
-                "spam_likelihood": spam_likelihood,
-            })
+    cache.set(cache_key, results, timeout=300)
 
-        cache.set(cache_key, data, timeout=300)  
+    return Response(results)
 
-        return Response(data, status=status.HTTP_200_OK)
 
-    return Response({"error": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
+# Detail view for a specific phone number (optional but recommended)
+@api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated])
+def person_detail(request, phone_number):
+
+    user = User.objects.filter(phone_number=phone_number).first()
+
+    data = {
+        "name": None,
+        "phone_number": phone_number,
+        "spam_likelihood": calculate_spam_likelihood(phone_number),
+        "email": None,
+        "is_registered_user": False,
+    }
+
+    if user:
+        data["name"] = user.username
+        data["is_registered_user"] = True
+
+        # Email visible only if searching user is in user's contacts
+        if Contact.objects.filter(
+            owner=user, phone_number=request.user.phone_number
+        ).exists():
+            data["email"] = user.email
+
+    else:
+        contact_entry = Contact.objects.filter(phone_number=phone_number).first()
+        if contact_entry:
+            data["name"] = contact_entry.name
+
+    return Response(data)
